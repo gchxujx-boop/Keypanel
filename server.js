@@ -245,7 +245,7 @@ function verifyHandler(req, res) {
 app.get("/api/health", (req, res) => res.json({ status: "success", message: "Server running" }));
 
 // fallback to login page
-app.get("*", (req, res, next) => {
+app.use((req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(__dirname, "public", "login.html"));
 });
