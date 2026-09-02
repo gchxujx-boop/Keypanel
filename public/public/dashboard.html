@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KeyPanel — Dashboard</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="app">
+  <div class="sidebar" style="display:flex;flex-direction:column;">
+    <div class="brand"><div class="logo">KP</div><span>KeyPanel</span></div>
+    <div class="nav-item active">🔑 Keys</div>
+    <div class="nav-item" onclick="document.getElementById('endpointsPanel').scrollIntoView({behavior:'smooth'})">🔗 Endpoints</div>
+    <div class="nav-item" onclick="document.getElementById('logsPanel').scrollIntoView({behavior:'smooth'})">📜 Activity Logs</div>
+    <div style="flex:1"></div>
+    <div class="nav-item logout-btn" onclick="logout()">🚪 Logout</div>
+  </div>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <h2>Dashboard</h2>
+        <div class="muted">Manage your APK license keys</div>
+      </div>
+      <button class="btn secondary small" onclick="loadAll()">↻ Refresh</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="num" id="statTotal">–</div><div class="label">Total Keys</div></div>
+      <div class="stat-card"><div class="num" id="statActive">–</div><div class="label">Active</div></div>
+      <div class="stat-card"><div class="num" id="statExpired">–</div><div class="label">Expired</div></div>
+      <div class="stat-card"><div class="num" id="statRevoked">–</div><div class="label">Revoked</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Generate New Key(s)</h3>
+      <div class="gen-form">
+        <div class="field"><label>Valid for (days, 0 = never)</label><input type="number" id="genDays" value="30" min="0" /></div>
+        <div class="field"><label>Device limit</label><input type="number" id="genDeviceLimit" value="1" min="1" /></div>
+        <div class="field"><label>How many keys</label><input type="number" id="genCount" value="1" min="1" max="100" /></div>
+        <div class="field" style="grid-column: span 2;"><label>Note (optional)</label><input type="text" id="genNote" placeholder="e.g. reseller batch #1" /></div>
+        <button class="btn" onclick="generateKey()">+ Generate</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>All Keys</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th><th>Status</th><th>Devices</th><th>Expires</th><th>Uses</th><th>Note</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="keysBody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel" id="endpointsPanel">
+      <h3>APK Verification Endpoints</h3>
+      <p class="muted" style="margin-top:-8px;font-size:13px;">
+        Point your APK at any of these — they all verify the same way. Send <code>key</code> and <code>device_id</code>
+        as query params (GET) or JSON/form body (POST).
+      </p>
+      <ul class="endpoint-list">
+        <li><code id="ep1"></code> — REST style</li>
+        <li><code id="ep2"></code> — for apps expecting a PHP-style endpoint</li>
+        <li><code id="ep3"></code> — generic alias</li>
+        <li><code id="ep4"></code> — verify alias</li>
+        <li><code id="ep5"></code> — auth alias</li>
+        <li><code id="ep6"></code> — /api alias</li>
+      </ul>
+      <p class="muted" style="font-size:13px;">
+        Example request: <code>GET /connect?key=FP-XXXX-XXXX-XXXX&device_id=abc123</code><br/>
+        Success response: <code>{"status":"success","expires_in_days":29}</code><br/>
+        Failure response: <code>{"status":"failed","message":"Invalid key"}</code>
+      </p>
+    </div>
+
+    <div class="panel" id="logsPanel">
+      <h3>Recent Activity</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Event</th></tr></thead>
+        <tbody id="logsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = localStorage.getItem('kp_token');
+if (!token) window.location.href = '/login.html';
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
+}
+function logout() {
+  localStorage.removeItem('kp_token');
+  window.location.href = '/login.html';
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: authHeaders() });
+  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  return res.json();
+}
+
+function keyStatus(k) {
+  if (k.revoked) return { text: 'Revoked', cls: 'revoked' };
+  if (k.expiresAt && new Date(k.expiresAt) <= new Date()) return { text: 'Expired', cls: 'expired' };
+  return { text: 'Active', cls: 'active' };
+}
+
+async function loadStats() {
+  const data = await api('/api/stats');
+  const s = data.stats;
+  statTotal.textContent = s.total;
+  statActive.textContent = s.active;
+  statExpired.textContent = s.expired;
+  statRevoked.textContent = s.revoked;
+}
+
+async function loadKeys() {
+  const data = await api('/api/keys');
+  const body = document.getElementById('keysBody');
+  body.innerHTML = '';
+  data.keys.slice().reverse().forEach(k => {
+    const st = keyStatus(k);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="key-mono">${k.key} <span class="copy-hint" style="cursor:pointer" onclick="copyKey('${k.key}')">📋</span></td>
+      <td><span class="badge ${st.cls}">${st.text}</span></td>
+      <td>${k.devices.length}/${k.deviceLimit}</td>
+      <td>${k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : 'Never'}</td>
+      <td>${k.usageCount}</td>
+      <td>${k.note || '-'}</td>
+      <td class="row-actions">
+        ${k.revoked
+          ? `<button class="btn secondary small" onclick="activateKey('${k.key}')">Activate</button>`
+          : `<button class="btn danger small" onclick="revokeKey('${k.key}')">Revoke</button>`}
+        <button class="btn secondary small" onclick="resetDevice('${k.key}')">Reset Device</button>
+        <button class="btn secondary small" onclick="extendKey('${k.key}')">+30d</button>
+        <button class="btn danger small" onclick="deleteKey('${k.key}')">Delete</button>
+      </td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+async function loadLogs() {
+  const data = await api('/api/logs');
+  const body = document.getElementById('logsBody');
+  body.innerHTML = '';
+  data.logs.slice(0, 50).forEach(l => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="muted" style="white-space:nowrap;">${new Date(l.time).toLocaleString()}</td><td>${l.line}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+async function loadAll() {
+  await Promise.all([loadStats(), loadKeys(), loadLogs()]);
+}
+
+async function generateKey() {
+  const days = document.getElementById('genDays').value;
+  const deviceLimit = document.getElementById('genDeviceLimit').value;
+  const count = document.getElementById('genCount').value;
+  const note = document.getElementById('genNote').value;
+  await api('/api/keys/generate', { method: 'POST', body: JSON.stringify({ days, deviceLimit, count, note }) });
+  loadAll();
+}
+async function revokeKey(key) { await api(`/api/keys/${key}/revoke`, { method: 'POST' }); loadAll(); }
+async function activateKey(key) { await api(`/api/keys/${key}/activate`, { method: 'POST' }); loadAll(); }
+async function resetDevice(key) { await api(`/api/keys/${key}/reset-device`, { method: 'POST' }); loadAll(); }
+async function extendKey(key) { await api(`/api/keys/${key}/extend`, { method: 'POST', body: JSON.stringify({ days: 30 }) }); loadAll(); }
+async function deleteKey(key) { if (confirm('Delete this key permanently?')) { await api(`/api/keys/${key}`, { method: 'DELETE' }); loadAll(); } }
+function copyKey(key) { navigator.clipboard.writeText(key); }
+
+const origin = window.location.origin;
+ep1.textContent = origin + '/api/verify?key=YOUR_KEY&device_id=DEVICE_ID';
+ep2.textContent = origin + '/connect.php?key=YOUR_KEY&device_id=DEVICE_ID';
+ep3.textContent = origin + '/server?key=YOUR_KEY&device_id=DEVICE_ID';
+ep4.textContent = origin + '/verify?key=YOUR_KEY&device_id=DEVICE_ID';
+ep5.textContent = origin + '/auth?key=YOUR_KEY&device_id=DEVICE_ID';
+ep6.textContent = origin + '/connect?key=YOUR_KEY&device_id=DEVICE_ID';
+
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>
